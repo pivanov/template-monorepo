@@ -1,0 +1,25 @@
+{
+	"type": "module",
+	"scripts": {
+		"preview": "vite preview",
+		"build": "vite build",
+		"dev": "vite"
+	},
+	"dependencies": {
+		"@codesandbox/sandpack-react": "^2.19.10",
+		"@codesandbox/sandpack-themes": "^2.0.21",
+		"bippy": "^0.1.1",
+		"clsx": "^2.1.1",
+		"react": "^19.0.0",
+		"react-dom": "^19.0.0",
+		"react-inspector": "^6.0.2",
+		"sugar-high": "^0.7.5",
+		"tailwind-merge": "^2.6.0"
+	},
+	"devDependencies": {
+		"@tailwindcss/vite": "4.0.0-beta.8",
+		"@vitejs/plugin-react": "^4.3.4",
+		"tailwindcss": "4.0.0-beta.8",
+		"vite": "^6.0.2"
+	}
+}

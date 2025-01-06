@@ -1,0 +1,21 @@
+{
+  "name": "your-project-name",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/workspace.mjs dev",
+    "build": "WORKSPACE_BUILD=true node scripts/workspace.mjs build",
+    "postbuild": "node scripts/version-warning.mjs",
+    "lint": "biome lint .",
+    "format": "biome format . --write",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "1.9.4",
+    "@types/node": "^22.10.5",
+    "boxen": "^8.0.1",
+    "chalk": "^5.4.1",
+    "typescript": "latest"
+  }
+}
