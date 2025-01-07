@@ -12,12 +12,12 @@ export default defineConfig({
     }),
     Inspect(),
   ],
-	resolve:
-		process.env.NODE_ENV === 'production'
-			? {}
-			: {
-					alias: {
-						bippy: path.resolve(__dirname, '../../packages/bippy/dist'),
-					},
-				},
+  resolve:
+    process.env.NODE_ENV === 'production'
+      ? {}
+      : {
+          alias: {
+            bippy: path.resolve(__dirname, '../../packages/bippy/dist'),
+          },
+        },
 });

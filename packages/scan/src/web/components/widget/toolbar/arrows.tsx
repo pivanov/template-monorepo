@@ -1,4 +1,3 @@
-import { memo } from 'preact/compat';
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { Store } from '~core/index';
 import { Icon } from '~web/components/icon';
@@ -7,26 +6,24 @@ import {
   getInspectableElements,
 } from '~web/components/inspector/utils';
 import { cn } from '~web/utils/helpers';
+import { constant } from '~web/utils/preact/constant';
 
-export const Arrows = memo(() => {
+export const Arrows = constant(() => {
   const refButtonPrevious = useRef<HTMLButtonElement>(null);
   const refButtonNext = useRef<HTMLButtonElement>(null);
   const refAllElements = useRef<Array<InspectableElement>>([]);
 
   const [shouldRender, setShouldRender] = useState(false);
 
-  const findNextElement = useCallback(
-    (currentElement: HTMLElement, direction: 'next' | 'previous') => {
-      const currentIndex = refAllElements.current.findIndex(
-        (item) => item.element === currentElement,
-      );
-      if (currentIndex === -1) return null;
+  const findNextElement = useCallback((currentElement: HTMLElement, direction: 'next' | 'previous') => {
+    const currentIndex = refAllElements.current.findIndex(
+      (item) => item.element === currentElement,
+    );
+    if (currentIndex === -1) return null;
 
-      const nextIndex = currentIndex + (direction === 'next' ? 1 : -1);
-      return refAllElements.current[nextIndex]?.element || null;
-    },
-    [],
-  );
+    const nextIndex = currentIndex + (direction === 'next' ? 1 : -1);
+    return refAllElements.current[nextIndex]?.element || null;
+  }, []);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: no deps
   const onPreviousFocus = useCallback(() => {

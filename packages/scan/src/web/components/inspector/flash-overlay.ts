@@ -10,9 +10,7 @@ const trackElementPosition = (
   element: Element,
   callback: (element: Element) => void,
 ): (() => void) => {
-  const handleScroll = () => {
-    callback(element);
-  };
+  const handleScroll = callback.bind(null, element);
 
   document.addEventListener('scroll', handleScroll, {
     passive: true,
@@ -107,8 +105,8 @@ export const flashManager = {
   },
 
   cleanupAll() {
-    for (const [element] of this.activeFlashes.entries()) {
-      this.cleanup(element);
+    for (const [, entry] of this.activeFlashes) {
+      this.cleanup(entry.element);
     }
   },
 };

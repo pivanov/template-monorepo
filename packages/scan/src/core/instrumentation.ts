@@ -17,6 +17,10 @@ import {
 import { isValidElement } from 'preact';
 import { isEqual } from '~core/utils';
 import { getChangedPropsDetailed } from '~web/components/inspector/utils';
+import {
+  RENDER_PHASE_STRING_TO_ENUM,
+  type RenderPhase,
+} from '~web/utils/outline';
 import { ReactScanInternals, Store, getIsProduction } from './index';
 
 let fps = 0;
@@ -78,8 +82,14 @@ export const isElementInViewport = (
   return isVisible && rect.width && rect.height;
 };
 
+export enum ChangeReason {
+  Props = 0b001,
+  State = 0b010,
+  Context = 0b100,
+}
+
 export interface RenderChange {
-  type: 'props' | 'state' | 'context';
+  type: ChangeReason;
   name: string;
   value: unknown;
   prevValue?: unknown;
@@ -89,12 +99,12 @@ export interface RenderChange {
 }
 
 export interface AggregatedChange {
-  type: Set<'props' | 'state' | 'context'>;
+  type: number; // union of AggregatedChangeReason
   unstable: boolean;
 }
 
 export interface Render {
-  phase: 'mount' | 'update' | 'unmount';
+  phase: RenderPhase;
   componentName: string | null;
   time: number | null;
   count: number;
@@ -131,10 +141,9 @@ export function fastSerialize(value: unknown, depth = 0): string {
 
   if (cache.has(value)) {
     const cached = cache.get(value);
-    if (cached === undefined) {
-      throw new Error('Cached value was undefined');
+    if (cached !== undefined) {
+      return cached;
     }
-    return cached;
   }
 
   if (Array.isArray(value)) {
@@ -194,7 +203,7 @@ export const getPropsChanges = (fiber: Fiber) => {
       continue;
     }
     const change: RenderChange = {
-      type: 'props',
+      type: ChangeReason.Props,
       name: propName,
       value: nextValue,
       unstable: false,
@@ -209,51 +218,74 @@ export const getPropsChanges = (fiber: Fiber) => {
   return changes;
 };
 
+interface StateFiber {
+  memoizedState: unknown;
+}
+
+function getStateChangesTraversal(
+  this: Array<RenderChange>,
+  prevState: StateFiber | null | undefined,
+  nextState: StateFiber | null | undefined,
+): void {
+  if (!prevState || !nextState) return;
+  if (isEqual(prevState.memoizedState, nextState.memoizedState)) return;
+  const change: RenderChange = {
+    type: ChangeReason.State,
+    name: '', // bad interface should make this a discriminated union
+    value: nextState.memoizedState,
+    unstable: false,
+  };
+  this.push(change);
+}
+
 export const getStateChanges = (fiber: Fiber) => {
   const changes: Array<RenderChange> = [];
 
-  traverseState(fiber, (prevState, nextState) => {
-    if (prevState?.memoizedState && nextState?.memoizedState) {
-      if (isEqual(prevState.memoizedState, nextState.memoizedState)) return;
-    }
-    const change: RenderChange = {
-      type: 'state',
-      name: '', // bad interface should make this a discriminated union
-      value: nextState?.memoizedState,
-      unstable: false,
-    };
-    changes.push(change);
-  });
+  traverseState(fiber, getStateChangesTraversal.bind(changes));
 
   return changes;
 };
 
+interface ContextFiber {
+  context: unknown; // refers to Context<T>;
+  memoizedValue: unknown;
+}
+
+function getContextChangesTraversal(
+  this: Array<RenderChange>,
+  nextValue: ContextFiber | null | undefined,
+  prevValue: ContextFiber | null | undefined,
+): void {
+  if (!nextValue || !prevValue) return;
+  const prevMemoizedValue = prevValue.memoizedValue;
+  const nextMemoizedValue = nextValue.memoizedValue;
+
+  const change: RenderChange = {
+    type: ChangeReason.Context,
+    name: '',
+    value: nextMemoizedValue,
+    unstable: false,
+  };
+  this.push(change);
+
+  const prevValueString = fastSerialize(prevMemoizedValue);
+  const nextValueString = fastSerialize(nextMemoizedValue);
+
+  if (
+    unstableTypes.includes(typeof prevMemoizedValue) &&
+    unstableTypes.includes(typeof nextMemoizedValue) &&
+    prevValueString === nextValueString
+  ) {
+    change.unstable = true;
+  }
+}
+
 export const getContextChanges = (fiber: Fiber) => {
   const changes: Array<RenderChange> = [];
 
-  traverseContexts(fiber, (prevContext, nextContext) => {
-    const prevValue = prevContext?.memoizedValue;
-    const nextValue = nextContext?.memoizedValue;
-
-    const change: RenderChange = {
-      type: 'context',
-      name: '',
-      value: nextValue,
-      unstable: false,
-    };
-    changes.push(change);
-
-    const prevValueString = fastSerialize(prevValue);
-    const nextValueString = fastSerialize(nextValue);
-
-    if (
-      unstableTypes.includes(typeof prevValue) &&
-      unstableTypes.includes(typeof nextValue) &&
-      prevValueString === nextValueString
-    ) {
-      change.unstable = true;
-    }
-  });
+  // Alexis: we use bind functions so that the compiler doesn't produce
+  // any closures
+  traverseContexts(fiber, getContextChangesTraversal.bind(changes));
 
   return changes;
 };
@@ -294,39 +326,52 @@ let inited = false;
 
 const getAllInstances = () => Array.from(instrumentationInstances.values());
 
+interface IsRenderUnnecessaryState {
+  isRequiredChange: boolean;
+}
+
+function isRenderUnnecessaryTraversal(
+  this: IsRenderUnnecessaryState,
+  _propsName: string,
+  prevValue: unknown,
+  nextValue: unknown,
+): void {
+  if (
+    !isEqual(prevValue, nextValue) &&
+    !isValueUnstable(prevValue, nextValue)
+  ) {
+    this.isRequiredChange = true;
+  }
+}
+
 // FIXME: calculation is slow
 export const isRenderUnnecessary = (fiber: Fiber) => {
   if (!didFiberCommit(fiber)) return true;
 
   const mutatedHostFibers = getMutatedHostFibers(fiber);
   for (const mutatedHostFiber of mutatedHostFibers) {
-    let isRequiredChange = false;
-    traverseProps(mutatedHostFiber, (prevValue, nextValue) => {
-      if (
-        !isEqual(prevValue, nextValue) &&
-        !isValueUnstable(prevValue, nextValue)
-      ) {
-        isRequiredChange = true;
-      }
-    });
-    if (isRequiredChange) return false;
+    const state: IsRenderUnnecessaryState = {
+      isRequiredChange: false,
+    };
+    traverseProps(mutatedHostFiber, isRenderUnnecessaryTraversal.bind(state));
+    if (state.isRequiredChange) return false;
   }
   return true;
 };
 
 const shouldRunUnnecessaryRenderCheck = () => {
+  // yes, this can be condensed into one conditional, but ifs are easier to reason/build on than long boolean expressions
   if (!ReactScanInternals.options.value.trackUnnecessaryRenders) {
-    // yes, this can be condensed into one conditional, but ifs are easier to reason/build on than long boolean expressions
     return false;
   }
 
+  // only run unnecessaryRenderCheck when monitoring is active in production if the user set dangerouslyForceRunInProduction
   if (
     getIsProduction() &&
     Store.monitor.value &&
     ReactScanInternals.options.value.dangerouslyForceRunInProduction &&
     ReactScanInternals.options.value.trackUnnecessaryRenders
   ) {
-    // only run unnecessaryRenderCheck when monitoring is active in production if the user set dangerouslyForceRunInProduction
     return true;
   }
 
@@ -370,7 +415,7 @@ export const createInstrumentation = (
         const changes: Array<RenderChange> = [];
 
         const propsChanges = getChangedPropsDetailed(fiber).map((change) => ({
-          type: 'props' as const,
+          type: ChangeReason.Props,
           name: change.name,
           value: change.value,
           prevValue: change.prevValue,
@@ -378,7 +423,7 @@ export const createInstrumentation = (
         }));
 
         const stateChanges = getStateChanges(fiber).map((change) => ({
-          type: 'state' as const,
+          type: ChangeReason.State,
           name: change.name,
           value: change.value,
           prevValue: change.prevValue,
@@ -387,7 +432,7 @@ export const createInstrumentation = (
         }));
 
         const contextChanges = getContextChanges(fiber).map((change) => ({
-          type: 'context' as const,
+          type: ChangeReason.Context,
           name: change.name,
           value: change.value,
           prevValue: change.prevValue,
@@ -395,14 +440,16 @@ export const createInstrumentation = (
           unstable: false,
         }));
 
-        changes.push(...propsChanges, ...stateChanges, ...contextChanges);
+        changes.push.apply(changes, propsChanges);
+        changes.push.apply(changes, stateChanges);
+        changes.push.apply(changes, contextChanges);
 
         const { selfTime } = getTimings(fiber);
 
         const fps = getFPS();
 
         const render: Render = {
-          phase,
+          phase: RENDER_PHASE_STRING_TO_ENUM[phase],
           componentName: getDisplayName(type),
           count: 1,
           changes,

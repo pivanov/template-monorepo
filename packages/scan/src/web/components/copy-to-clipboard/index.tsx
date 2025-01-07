@@ -36,23 +36,20 @@ export const CopyToClipboard = memo(
       }
     }, [isCopied]);
 
-    const copyToClipboard = useCallback(
-      (e: MouseEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
+    const copyToClipboard = useCallback((e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
 
-        void (async () => {
-          try {
-            await navigator.clipboard.writeText(text);
-            setIsCopied(true);
-            onCopy?.(true, text);
-          } catch {
-            onCopy?.(false, text);
-          }
-        })();
-      },
-      [text, onCopy],
-    );
+      navigator.clipboard.writeText(text).then(
+        () => {
+          setIsCopied(true);
+          onCopy?.(true, text);
+        },
+        () => {
+          onCopy?.(false, text);
+        },
+      );
+    }, [text, onCopy]);
 
     const ClipboardIcon = useMemo(
       (): JSX.Element => (

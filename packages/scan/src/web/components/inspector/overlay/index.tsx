@@ -7,6 +7,7 @@ import {
   getCompositeComponentFromElement,
 } from '~web/components/inspector/utils';
 import { cn, throttle } from '~web/utils/helpers';
+import { lerp } from '~web/utils/lerp';
 
 type DrawKind = 'locked' | 'inspecting';
 
@@ -51,10 +52,6 @@ export const ScanOverlay = () => {
   );
   const refIsFadingOut = useRef(false);
   const refLastFrameTime = useRef<number>(0);
-
-  const linearInterpolation = (start: number, end: number, t: number) => {
-    return start * (1 - t) + end * t;
-  };
 
   const drawLockIcon = (
     ctx: CanvasRenderingContext2D,
@@ -215,22 +212,10 @@ export const ScanOverlay = () => {
       }
 
       refCurrentRect.current = {
-        left: linearInterpolation(
-          refCurrentRect.current.left,
-          targetRect.left,
-          t,
-        ),
-        top: linearInterpolation(refCurrentRect.current.top, targetRect.top, t),
-        width: linearInterpolation(
-          refCurrentRect.current.width,
-          targetRect.width,
-          t,
-        ),
-        height: linearInterpolation(
-          refCurrentRect.current.height,
-          targetRect.height,
-          t,
-        ),
+        left: lerp(refCurrentRect.current.left, targetRect.left, t),
+        top: lerp(refCurrentRect.current.top, targetRect.top, t),
+        width: lerp(refCurrentRect.current.width, targetRect.width, t),
+        height: lerp(refCurrentRect.current.height, targetRect.height, t),
       };
 
       drawRect(canvas, ctx, kind, parentCompositeFiber);

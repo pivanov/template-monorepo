@@ -2,6 +2,7 @@ import type { Fiber } from 'bippy';
 import { type OutlineKey, ReactScanInternals } from '~core/index';
 import type { AggregatedChange } from '~core/instrumentation';
 import { getLabelText, joinAggregations } from '~core/utils';
+import { lerp } from '~web/utils/lerp';
 import { throttle } from './helpers';
 import { LRUMap } from './lru';
 import { type DrawingQueue, outlineWorker } from './outline-worker';
@@ -10,6 +11,7 @@ enum Reason {
   Commit = 0b001,
   Unstable = 0b010,
   Unnecessary = 0b100,
+  All = 0b111,
 }
 
 export interface OutlineLabel {
@@ -86,8 +88,10 @@ export const batchGetBoundingRects = (
 
 export const flushOutlines = async () => {
   if (
-    !ReactScanInternals.scheduledOutlines.size &&
-    !ReactScanInternals.activeOutlines.size
+    !(
+      ReactScanInternals.scheduledOutlines.size ||
+      ReactScanInternals.activeOutlines.size
+    )
   ) {
     return;
   }
@@ -101,13 +105,10 @@ export const flushOutlines = async () => {
   recalcOutlines();
 
   ReactScanInternals.scheduledOutlines = new Map();
-
-  const { options } = ReactScanInternals;
-
-  options.value.onPaintStart?.(flattenedScheduledOutlines);
+  ReactScanInternals.options.value.onPaintStart?.(flattenedScheduledOutlines);
 
   if (!animationFrameId) {
-    animationFrameId = requestAnimationFrame(() => fadeOutOutline());
+    animationFrameId = requestAnimationFrame(fadeOutOutline);
   }
 };
 
@@ -127,6 +128,8 @@ const shouldSkipInterpolation = (rect: DOMRect) => {
   return !ReactScanInternals.options.value.smoothlyAnimateOutlines;
 };
 
+const INTERPOLATION_SPEED = 0.2;
+
 export const fadeOutOutline = () => {
   const drawingQueue: Array<DrawingQueue> = [];
   const pendingLabeledOutlines: Array<OutlineLabel> = [];
@@ -138,7 +141,7 @@ export const fadeOutOutline = () => {
     const invariantActiveOutline = activeOutline as {
       [K in keyof Outline]: NonNullable<Outline[K]>;
     };
-    let frame: number | undefined;
+    let frame: number | null = null;
 
     for (const aggregatedRender of invariantActiveOutline.groupedAggregatedRender.values()) {
       const newFrame = (aggregatedRender.frame ?? 0) + 1;
@@ -174,30 +177,23 @@ export const fadeOutOutline = () => {
     // don't re-create to avoid gc time
     phases.clear();
 
-    let didCommit = false;
-    let unstable = false;
-    let isUnnecessary = false;
-
     for (const render of invariantActiveOutline.groupedAggregatedRender.values()) {
       if (render.unnecessary) {
-        isUnnecessary = true;
+        reasons |= Reason.Unnecessary;
+        color.r = 128;
+        color.g = 128;
+        color.b = 128;
       }
       if (render.changes.unstable) {
-        unstable = true;
+        reasons |= Reason.Unstable;
       }
       if (render.didCommit) {
-        didCommit = true;
+        reasons |= Reason.Commit;
       }
-    }
 
-    if (didCommit) reasons |= Reason.Commit;
-    if (unstable) reasons |= Reason.Unstable;
-
-    if (isUnnecessary) {
-      reasons |= Reason.Unnecessary;
-      color.r = 128;
-      color.g = 128;
-      color.b = 128;
+      if (reasons === Reason.All) {
+        break;
+      }
     }
 
     const alphaScalar = 0.8;
@@ -211,7 +207,7 @@ export const fadeOutOutline = () => {
     const shouldSkip = shouldSkipInterpolation(target);
     if (shouldSkip) {
       invariantActiveOutline.current = target;
-      for (const v of invariantActiveOutline.groupedAggregatedRender.values()) {
+      for (const [, v] of invariantActiveOutline.groupedAggregatedRender) {
         v.computedCurrent = target;
       }
     } else {
@@ -223,25 +219,18 @@ export const fadeOutOutline = () => {
           target.height,
         );
       }
-
-      const INTERPOLATION_SPEED = 0.2;
       const current = invariantActiveOutline.current;
-      if (!current) return;
-
-      const lerp = (start: number, end: number) => {
-        return start + (end - start) * INTERPOLATION_SPEED;
-      };
 
       const computedCurrent = new DOMRect(
-        lerp(current.x, target.x),
-        lerp(current.y, target.y),
-        lerp(current.width, target.width),
-        lerp(current.height, target.height),
+        lerp(current.x, target.x, INTERPOLATION_SPEED),
+        lerp(current.y, target.y, INTERPOLATION_SPEED),
+        lerp(current.width, target.width, INTERPOLATION_SPEED),
+        lerp(current.height, target.height, INTERPOLATION_SPEED),
       );
 
       invariantActiveOutline.current = computedCurrent;
 
-      for (const v of invariantActiveOutline.groupedAggregatedRender.values()) {
+      for (const [, v] of invariantActiveOutline.groupedAggregatedRender) {
         v.computedCurrent = computedCurrent;
       }
     }
@@ -335,10 +324,23 @@ export interface Outline {
   /* This value is computed before the full rendered text is shown, so its only considered an estimate */
   estimatedTextWidth: number | null; // todo: estimated is stupid just make it the actual
 }
+
+export enum RenderPhase {
+  Mount = 0b001,
+  Update = 0b010,
+  Unmount = 0b100,
+}
+
+export const RENDER_PHASE_STRING_TO_ENUM = {
+  mount: RenderPhase.Mount,
+  update: RenderPhase.Update,
+  unmount: RenderPhase.Unmount,
+} as const;
+
 export interface AggregatedRender {
   name: ComponentName;
   frame: number | null;
-  phase: Set<'mount' | 'update' | 'unmount'>;
+  phase: number; // union of RenderPhase
   time: number | null;
   aggregatedCount: number;
   forget: boolean;
@@ -493,8 +495,11 @@ const activateOutlines = async () => {
       // handles canceling the animation of the associated render that was painted at a different location
       if (prevAggregatedRender?.computedKey) {
         const groupOnKey = activeOutlines.get(prevAggregatedRender.computedKey);
-        groupOnKey?.groupedAggregatedRender?.forEach(
-          (value, prevStoredFiber) => {
+        if (groupOnKey?.groupedAggregatedRender) {
+          for (const [
+            prevStoredFiber,
+            value,
+          ] of groupOnKey.groupedAggregatedRender) {
             if (areFibersEqual(prevStoredFiber, fiber)) {
               value.frame = 45; // todo: make this max frame, not hardcoded
 
@@ -503,8 +508,8 @@ const activateOutlines = async () => {
                 existingOutline.current = value.computedCurrent;
               }
             }
-          },
-        );
+          }
+        }
       }
       activeOutlines.set(key, existingOutline);
     } else if (!prevAggregatedRender) {
@@ -538,32 +543,65 @@ export interface MergedOutlineLabel {
   rect: DOMRect;
 }
 
+interface TransformedOutlineLabel {
+  original: OutlineLabel;
+  rect: DOMRect;
+}
+
+function ascendingTransformedOutlineLabel(
+  a: TransformedOutlineLabel,
+  b: TransformedOutlineLabel,
+): number {
+  return a.rect.x - b.rect.x;
+}
+
+function getTransformedOutlineLabels(
+  labels: Array<OutlineLabel>,
+): Array<TransformedOutlineLabel> {
+  const array: Array<TransformedOutlineLabel> = [];
+
+  for (let i = 0, len = labels.length, label: OutlineLabel; i < len; i++) {
+    label = labels[i];
+    const current = label.activeOutline.current;
+    if (current) {
+      array.push({
+        original: label,
+        rect: applyLabelTransform(current, label.textWidth),
+      });
+    }
+  }
+
+  array.sort(ascendingTransformedOutlineLabel);
+  return array;
+}
+
+function getMergedOutlineLabels(
+  labels: Array<OutlineLabel>,
+): Array<MergedOutlineLabel> {
+  const array: Array<MergedOutlineLabel> = [];
+
+  for (let i = 0, len = labels.length; i < len; i++) {
+    array.push(toMergedLabel(labels[i]));
+  }
+
+  return array;
+}
+
 // todo: optimize me so this can run always
 // note: this can be implemented in nlogn using https://en.wikipedia.org/wiki/Sweep_line_algorithm
 export const mergeOverlappingLabels = (
   labels: Array<OutlineLabel>,
 ): Array<MergedOutlineLabel> => {
   if (labels.length > 1500) {
-    return labels.map((label) => toMergedLabel(label));
+    return getMergedOutlineLabels(labels);
   }
 
-  const transformed = labels.map((label) => {
-    const current = label.activeOutline.current;
-    if (!current) {
-      throw new Error('Label outline missing current rect');
-    }
-    return {
-      original: label,
-      rect: applyLabelTransform(current, label.textWidth),
-    };
-  });
-
-  transformed.sort((a, b) => a.rect.x - b.rect.x);
+  const transformed = getTransformedOutlineLabels(labels);
 
   const mergedLabels: Array<MergedOutlineLabel> = [];
   const mergedSet = new Set<number>();
 
-  for (let i = 0; i < transformed.length; i++) {
+  for (let i = 0, len = transformed.length; i < len; i++) {
     if (mergedSet.has(i)) continue;
 
     let currentMerged = toMergedLabel(
@@ -572,7 +610,7 @@ export const mergeOverlappingLabels = (
     );
     let currentRight = currentMerged.rect.x + currentMerged.rect.width;
 
-    for (let j = i + 1; j < transformed.length; j++) {
+    for (let j = i + 1; j < len; j++) {
       if (mergedSet.has(j)) continue;
 
       if (transformed[j].rect.x > currentRight) {
@@ -600,18 +638,17 @@ function toMergedLabel(
   label: OutlineLabel,
   rectOverride?: DOMRect,
 ): MergedOutlineLabel {
+  const current = label.activeOutline.current;
+  const groupedAggregatedRender = label.activeOutline.groupedAggregatedRender;
   const rect =
     rectOverride ??
-    (label.activeOutline.current &&
-      applyLabelTransform(label.activeOutline.current, label.textWidth));
+    (current
+      ? applyLabelTransform(current, label.textWidth)
+      : new DOMRect(0, 0, 0, 0));
+  const groupedArray = groupedAggregatedRender
+    ? Array.from(groupedAggregatedRender.values())
+    : [];
 
-  if (!rect || !label.activeOutline.groupedAggregatedRender) {
-    throw new Error('Invalid label state');
-  }
-
-  const groupedArray = Array.from(
-    label.activeOutline.groupedAggregatedRender.values(),
-  );
   return {
     alpha: label.alpha,
     color: label.color,
@@ -636,7 +673,7 @@ function mergeTwoLabels(
   return {
     alpha: Math.max(a.alpha, b.alpha),
 
-    ...pickColorClosestToStartStage(a, b), // kinda wrong, should pick color in earliest stage
+    color: pickColorClosestToStartStage(a, b), // kinda wrong, should pick color in earliest stage
     reasons: mergedReasons,
     groupedAggregatedRender: mergedGrouped,
     rect: mergedRect,
@@ -651,19 +688,25 @@ function getBoundingRect(r1: DOMRect, r2: DOMRect): DOMRect {
   return new DOMRect(x1, y1, x2 - x1, y2 - y1);
 }
 
+interface Color {
+  r: number;
+  g: number;
+  b: number;
+}
+
 function pickColorClosestToStartStage(
   a: MergedOutlineLabel,
   b: MergedOutlineLabel,
-) {
+): Color {
   // stupid hack to always take the gray value when the render is unnecessary (we know the gray value has equal rgb)
   if (a.color.r === a.color.g && a.color.g === a.color.b) {
-    return { color: a.color };
+    return a.color;
   }
   if (b.color.r === b.color.g && b.color.g === b.color.b) {
-    return { color: b.color };
+    return b.color;
   }
 
-  return { color: a.color.r <= b.color.r ? a.color : b.color };
+  return a.color.r <= b.color.r ? a.color : b.color;
 }
 
 function getOverlapArea(rect1: DOMRect, rect2: DOMRect): number {
@@ -728,8 +771,9 @@ function getMeasuringContext(): MeasuringContext {
 
 export const measureTextCached = (text: string): TextMetrics => {
   const cached = textMeasurementCache.get(text);
-  if (cached) return cached;
-
+  if (cached) {
+    return cached;
+  }
   const ctx = getMeasuringContext();
   ctx.font = `11px ${MONO_FONT}`;
   const metrics = ctx.measureText(text);

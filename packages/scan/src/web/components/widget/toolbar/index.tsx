@@ -1,12 +1,12 @@
-import { memo } from 'preact/compat';
 import { useCallback, useEffect } from 'preact/hooks';
 import { ReactScanInternals, Store, setOptions } from '~core/index';
 import { Icon } from '~web/components/icon';
 import FpsMeter from '~web/components/widget/fps-meter';
 import { Arrows } from '~web/components/widget/toolbar/arrows';
 import { cn } from '~web/utils/helpers';
+import { constant } from '~web/utils/preact/constant';
 
-export const Toolbar = memo(() => {
+export const Toolbar = constant(() => {
   const inspectState = Store.inspectState;
 
   const isInspectActive = inspectState.value.kind === 'inspecting';
@@ -137,5 +137,3 @@ export const Toolbar = memo(() => {
     </div>
   );
 });
-
-export default Toolbar;

@@ -78,12 +78,16 @@ export const getRDTHook = (onActive?: () => unknown) => {
 };
 
 try {
-  const isNode = typeof process !== 'undefined' && process.versions?.node;
-  const isReactNative =
+  // __REACT_DEVTOOLS_GLOBAL_HOOK__ must exist before React is ever executed
+  if (
     typeof window !== 'undefined' &&
-    window.navigator?.product === 'ReactNative';
-
-  if (!isNode && !isReactNative) {
+    // @ts-expect-error `document` may not be defined in some enviroments
+    (window.document?.createElement ||
+      window.navigator?.product === 'ReactNative') &&
+    typeof process !== 'undefined' &&
+    process.versions != null &&
+    process.versions.node != null
+  ) {
     installRDTHook();
   }
 } catch {}

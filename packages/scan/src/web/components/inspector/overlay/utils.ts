@@ -40,55 +40,62 @@ const ensureRecord = (
     return {};
   }
 
-  if (value instanceof Element) {
-    return {
-      type: 'Element',
-      tagName: value.tagName.toLowerCase(),
-    };
-  }
+  switch (true) {
+    case value instanceof Element:
+      return {
+        type: 'Element',
+        tagName: (value as Element).tagName.toLowerCase(),
+      };
 
-  if (typeof value === 'function') {
-    return { type: 'function', name: value.name || 'anonymous' };
-  }
+    case typeof value === 'function':
+      return {
+        type: 'function',
+        name: (value as { name?: string }).name || 'anonymous',
+      };
 
-  if (
-    value &&
-    (value instanceof Promise || (typeof value === 'object' && 'then' in value))
-  ) {
-    return { type: 'promise' };
-  }
+    case Boolean(
+      value &&
+        (value instanceof Promise ||
+          (typeof value === 'object' && 'then' in value)),
+    ):
+      return { type: 'promise' };
 
-  if (typeof value === 'object') {
-    if (seen.has(value)) {
-      return { type: 'circular' };
-    }
-
-    if (Array.isArray(value)) {
-      seen.add(value);
-      const safeArray = value.map((item) => ensureRecord(item, seen));
-      return { type: 'array', length: value.length, items: safeArray };
-    }
-
-    seen.add(value);
-
-    const result: Record<string, unknown> = {};
-    try {
-      const keys = Object.keys(value);
-      for (const key of keys) {
-        try {
-          const val = (value as Record<string, unknown>)[key];
-          result[key] = ensureRecord(val, seen);
-        } catch {
-          result[key] = { type: 'error', message: 'Failed to access property' };
-        }
+    case typeof value === 'object': {
+      if (seen.has(value as object)) {
+        return { type: 'circular' };
       }
-      return result;
-    } catch {
-      return { type: 'object' };
-    }
-  }
 
-  return { value };
+      if (Array.isArray(value)) {
+        seen.add(value);
+        const safeArray = value.map((item) => ensureRecord(item, seen));
+        return { type: 'array', length: value.length, items: safeArray };
+      }
+
+      seen.add(value as object);
+
+      const result: Record<string, unknown> = {};
+      try {
+        const keys = Object.keys(value as object);
+        for (const key of keys) {
+          try {
+            const val = (value as Record<string, unknown>)[key];
+            result[key] = ensureRecord(val, seen);
+          } catch {
+            result[key] = {
+              type: 'error',
+              message: 'Failed to access property',
+            };
+          }
+        }
+        return result;
+      } catch {
+        return { type: 'object' };
+      }
+    }
+
+    default:
+      return { value };
+  }
 };
 
 export const resetStateTracking = () => {
@@ -196,7 +203,7 @@ export const getChangedState = (fiber: Fiber): Set<string> => {
 const getStateValue = (memoizedState: MemoizedState): unknown => {
   if (!memoizedState) return undefined;
 
-  const queue = memoizedState.queue as { lastRenderedState: unknown } | null;
+  const queue = memoizedState.queue;
   if (queue) {
     return queue.lastRenderedState;
   }
@@ -387,35 +394,14 @@ export const getAllFiberContexts = (
 
 export const getCurrentContext = (fiber: Fiber) => {
   const contexts = getAllFiberContexts(fiber);
+  // TODO(Alexis): megamorphic code
   const contextObj: Record<string, unknown> = {};
 
-  contexts.forEach((value, contextName) => {
+  for (const [contextName, value] of contexts) {
     contextObj[contextName] = value.displayValue;
-  });
-
-  return contextObj;
-};
-
-const getContextDisplayName = (contextType: unknown): string => {
-  if (typeof contextType !== 'object' || contextType === null) {
-    return String(contextType);
   }
 
-  const typedContext = contextType as Partial<
-    ReactContext & {
-      Provider: { displayName?: string };
-      Consumer: { displayName?: string };
-      type: { name?: string };
-    }
-  >;
-
-  return (
-    typedContext.displayName ??
-    typedContext.Provider?.displayName ??
-    typedContext.Consumer?.displayName ??
-    typedContext.type?.name?.replace('Provider', '') ??
-    'Unnamed'
-  );
+  return contextObj;
 };
 
 export const getChangedContext = (fiber: Fiber): Set<string> => {
@@ -424,9 +410,7 @@ export const getChangedContext = (fiber: Fiber): Set<string> => {
 
   const currentContexts = getAllFiberContexts(fiber);
 
-  currentContexts.forEach((_currentValue, contextType) => {
-    const contextName = getContextDisplayName(contextType);
-
+  for (const [contextName] of currentContexts) {
     let searchFiber: Fiber | null = fiber;
     let providerFiber: Fiber | null = null;
 
@@ -450,7 +434,7 @@ export const getChangedContext = (fiber: Fiber): Set<string> => {
         );
       }
     }
-  });
+  }
 
   return changes;
 };

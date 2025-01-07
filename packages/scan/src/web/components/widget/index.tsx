@@ -22,7 +22,7 @@ import {
   getBestCorner,
 } from './helpers';
 import { ResizeHandle } from './resize-handle';
-import Toolbar from './toolbar';
+import { Toolbar } from './toolbar';
 
 export const Widget = () => {
   const refShouldExpand = useRef<boolean>(false);

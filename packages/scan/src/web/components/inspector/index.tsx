@@ -15,6 +15,7 @@ import { isEqual } from '~core/utils';
 import { CopyToClipboard } from '~web/components/copy-to-clipboard';
 import { Icon } from '~web/components/icon';
 import { cn, tryOrElse } from '~web/utils/helpers';
+import { constant } from '~web/utils/preact/constant';
 import { flashManager } from './flash-overlay';
 import {
   getChangedContext,
@@ -173,7 +174,7 @@ const isPromise = (value: unknown): value is Promise<unknown> => {
 };
 
 const isEditableValue = (value: unknown, parentPath?: string): boolean => {
-  if (value === null || value === undefined) return true;
+  if (value == null) return true;
 
   if (isPromise(value)) return false;
 
@@ -258,57 +259,61 @@ const sanitizeErrorMessage = (error: string): string => {
 };
 
 const formatValue = (value: unknown): string => {
-  if (value === null) return 'null';
-  if (value === undefined) return 'undefined';
-  if (isPromise(value)) return 'Promise';
-
-  switch (true) {
-    case value instanceof Map:
-      return `Map(${value.size})`;
-    case value instanceof Set:
-      return `Set(${value.size})`;
-    case value instanceof Date:
-      return value
-        .toLocaleString(undefined, {
-          year: 'numeric',
-          month: '2-digit',
-          day: '2-digit',
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-          hour12: false,
-        })
-        .replace(/[/,-]/g, '.');
-    case value instanceof RegExp:
-      return 'RegExp';
-    case value instanceof Error:
-      return 'Error';
-    case value instanceof ArrayBuffer:
-      return `ArrayBuffer(${value.byteLength})`;
-    case value instanceof DataView:
-      return `DataView(${value.byteLength})`;
-    case ArrayBuffer.isView(value):
-      return `${value.constructor.name}(${getArrayLength(value)})`;
-    case Array.isArray(value):
-      return `Array(${value.length})`;
-    default:
-      switch (typeof value) {
-        case 'string':
-          return `"${value}"`;
-        case 'number':
-        case 'boolean':
-        case 'bigint':
-          return String(value);
-        case 'symbol':
-          return value.toString();
-        case 'object': {
+  switch (typeof value) {
+    case 'undefined':
+      return 'undefined';
+    case 'string':
+      return `"${value}"`;
+    case 'number':
+    case 'boolean':
+    case 'bigint':
+      return String(value);
+    case 'symbol':
+      return value.toString();
+    case 'object': {
+      if (!value) {
+        return 'null';
+      }
+      switch (true) {
+        case value instanceof Map:
+          return `Map(${value.size})`;
+        case value instanceof Set:
+          return `Set(${value.size})`;
+        case value instanceof Date:
+          return value
+            .toLocaleString(undefined, {
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+              hour: '2-digit',
+              minute: '2-digit',
+              second: '2-digit',
+              hour12: false,
+            })
+            .replace(/[/,-]/g, '.');
+        case value instanceof RegExp:
+          return 'RegExp';
+        case value instanceof Error:
+          return 'Error';
+        case value instanceof ArrayBuffer:
+          return `ArrayBuffer(${value.byteLength})`;
+        case value instanceof DataView:
+          return `DataView(${value.byteLength})`;
+        case ArrayBuffer.isView(value):
+          return `${value.constructor.name}(${getArrayLength(value)})`;
+        case Array.isArray(value):
+          return `Array(${value.length})`;
+        case isPromise(value):
+          return 'Promise';
+        default: {
           const keys = Object.keys(value);
           if (keys.length <= 5) return `{${keys.join(', ')}}`;
           return `{${keys.slice(0, 5).join(', ')}, ...${keys.length - 5}}`;
         }
-        default:
-          return typeof value;
       }
+    }
+    default:
+      return typeof value;
   }
 };
 
@@ -422,60 +427,68 @@ const parseArrayValue = (value: string): Array<unknown> => {
 
 const parseValue = (value: string, currentType: unknown): unknown => {
   try {
-    if (typeof currentType === 'number') return Number(value);
-    if (typeof currentType === 'string') return value;
-    if (typeof currentType === 'boolean') return value === 'true';
-    if (typeof currentType === 'bigint') return BigInt(value);
-    if (currentType === null) return null;
-    if (currentType === undefined) return undefined;
-
-    if (currentType instanceof RegExp) {
-      try {
-        const match = /^\/(?<pattern>.*)\/(?<flags>[gimuy]*)$/.exec(value);
-        if (match?.groups) {
-          return new RegExp(match.groups.pattern, match.groups.flags);
+    switch (typeof currentType) {
+      case 'number':
+        return Number(value);
+      case 'string':
+        return value;
+      case 'boolean':
+        return value === 'true';
+      case 'bigint':
+        return BigInt(value);
+      case 'undefined':
+        return undefined;
+      case 'object': {
+        if (!currentType) {
+          return null;
         }
-        return new RegExp(value);
-      } catch {
-        return currentType;
+
+        if (Array.isArray(currentType)) {
+          return parseArrayValue(value.slice(1, -1));
+        }
+
+        if (currentType instanceof RegExp) {
+          try {
+            const match = /^\/(?<pattern>.*)\/(?<flags>[gimuy]*)$/.exec(value);
+            if (match?.groups) {
+              return new RegExp(match.groups.pattern, match.groups.flags);
+            }
+            return new RegExp(value);
+          } catch {
+            return currentType;
+          }
+        }
+
+        if (currentType instanceof Map) {
+          const entries = value
+            .slice(1, -1)
+            .split(', ')
+            .map((entry) => {
+              const [key, val] = entry.split(' => ');
+              return [parseValue(key, ''), parseValue(val, '')] as [
+                unknown,
+                unknown,
+              ];
+            });
+          return new Map(entries);
+        }
+
+        if (currentType instanceof Set) {
+          const values = value
+            .slice(1, -1)
+            .split(', ')
+            .map((v) => parseValue(v, ''));
+          return new Set(values);
+        }
+        const entries = value
+          .slice(1, -1)
+          .split(', ')
+          .map((entry) => {
+            const [key, val] = entry.split(': ');
+            return [key, parseValue(val, '')];
+          });
+        return Object.fromEntries(entries);
       }
-    }
-
-    if (currentType instanceof Map) {
-      const entries = value
-        .slice(1, -1)
-        .split(', ')
-        .map((entry) => {
-          const [key, val] = entry.split(' => ');
-          return [parseValue(key, ''), parseValue(val, '')] as [
-            unknown,
-            unknown,
-          ];
-        });
-      return new Map(entries);
-    }
-
-    if (currentType instanceof Set) {
-      const values = value
-        .slice(1, -1)
-        .split(', ')
-        .map((v) => parseValue(v, ''));
-      return new Set(values);
-    }
-
-    if (Array.isArray(currentType)) {
-      return parseArrayValue(value.slice(1, -1));
-    }
-
-    if (typeof currentType === 'object') {
-      const entries = value
-        .slice(1, -1)
-        .split(', ')
-        .map((entry) => {
-          const [key, val] = entry.split(': ');
-          return [key, parseValue(val, '')];
-        });
-      return Object.fromEntries(entries);
     }
 
     return value;
@@ -492,14 +505,20 @@ const detectValueType = (
 } => {
   const trimmed = value.trim();
 
+  switch (trimmed) {
+    case 'undefined':
+      return { type: 'undefined', value: undefined };
+    case 'null':
+      return { type: 'null', value: null };
+    case 'true':
+      return { type: 'boolean', value: true };
+    case 'false':
+      return { type: 'boolean', value: false };
+  }
+
   if (/^".*"$/.test(trimmed)) {
     return { type: 'string', value: trimmed.slice(1, -1) };
   }
-
-  if (trimmed === 'undefined') return { type: 'undefined', value: undefined };
-  if (trimmed === 'null') return { type: 'null', value: null };
-  if (trimmed === 'true') return { type: 'boolean', value: true };
-  if (trimmed === 'false') return { type: 'boolean', value: false };
 
   if (/^-?\d+(?:\.\d+)?$/.test(trimmed)) {
     return { type: 'number', value: Number(trimmed) };
@@ -686,54 +705,51 @@ const PropertyElement = ({
   const prevValue = lastRendered.get(currentPath);
   const isChanged = prevValue !== undefined && !isEqual(prevValue, value);
 
-  const renderNestedProperties = useCallback(
-    (obj: InspectableValue) => {
-      let entries: Array<IterableEntry>;
+  const renderNestedProperties = useCallback((obj: InspectableValue) => {
+    let entries: Array<IterableEntry>;
 
-      if (obj instanceof ArrayBuffer) {
-        const view = new Uint8Array(obj);
-        entries = Array.from(view).map((v, i) => [i, v]);
-      } else if (obj instanceof DataView) {
-        const view = new Uint8Array(obj.buffer, obj.byteOffset, obj.byteLength);
-        entries = Array.from(view).map((v, i) => [i, v]);
-      } else if (ArrayBuffer.isView(obj)) {
-        if (obj instanceof BigInt64Array || obj instanceof BigUint64Array) {
-          entries = Array.from({ length: obj.length }, (_, i) => [i, obj[i]]);
-        } else {
-          entries = Array.from(obj as ArrayLike<number>).map((v, i) => [i, v]);
-        }
-      } else if (obj instanceof Map) {
-        entries = Array.from(obj.entries()).map(([k, v]) => [String(k), v]);
-      } else if (obj instanceof Set) {
-        entries = Array.from(obj).map((v, i) => [i, v]);
-      } else if (Array.isArray(obj)) {
-        entries = obj.map((value, index) => [index, value]);
+    if (obj instanceof ArrayBuffer) {
+      const view = new Uint8Array(obj);
+      entries = Array.from(view).map((v, i) => [i, v]);
+    } else if (obj instanceof DataView) {
+      const view = new Uint8Array(obj.buffer, obj.byteOffset, obj.byteLength);
+      entries = Array.from(view).map((v, i) => [i, v]);
+    } else if (ArrayBuffer.isView(obj)) {
+      if (obj instanceof BigInt64Array || obj instanceof BigUint64Array) {
+        entries = Array.from({ length: obj.length }, (_, i) => [i, obj[i]]);
       } else {
-        entries = Object.entries(obj);
+        entries = Array.from(obj as ArrayLike<number>).map((v, i) => [i, v]);
       }
+    } else if (obj instanceof Map) {
+      entries = Array.from(obj.entries()).map(([k, v]) => [String(k), v]);
+    } else if (obj instanceof Set) {
+      entries = Array.from(obj).map((v, i) => [i, v]);
+    } else if (Array.isArray(obj)) {
+      entries = obj.map((value, index) => [index, value]);
+    } else {
+      entries = Object.entries(obj);
+    }
 
-      const canEditChildren = !(
-        obj instanceof DataView ||
-        obj instanceof ArrayBuffer ||
-        ArrayBuffer.isView(obj)
-      );
+    const canEditChildren = !(
+      obj instanceof DataView ||
+      obj instanceof ArrayBuffer ||
+      ArrayBuffer.isView(obj)
+    );
 
-      return entries.map(([key, value]) => (
-        <PropertyElement
-          key={String(key)}
-          name={String(key)}
-          value={value}
-          section={section}
-          level={level + 1}
-          parentPath={currentPath}
-          objectPathMap={objectPathMap}
-          changedKeys={changedKeys}
-          allowEditing={canEditChildren}
-        />
-      ));
-    },
-    [section, level, currentPath, objectPathMap, changedKeys],
-  );
+    return entries.map(([key, value]) => (
+      <PropertyElement
+        key={String(key)}
+        name={String(key)}
+        value={value}
+        section={section}
+        level={level + 1}
+        parentPath={currentPath}
+        objectPathMap={objectPathMap}
+        changedKeys={changedKeys}
+        allowEditing={canEditChildren}
+      />
+    ));
+  }, [section, level, currentPath, objectPathMap, changedKeys]);
 
   const valuePreview = useMemo(() => formatValue(value), [value]);
 
@@ -807,73 +823,70 @@ const PropertyElement = ({
     }
   }, [canEdit]);
 
-  const handleSave = useCallback(
-    (newValue: unknown) => {
-      if (isEqual(value, newValue)) {
-        setIsEditing(false);
-        return;
-      }
-
-      if (section === 'props' && overrideProps) {
-        tryOrElse(() => {
-          if (!fiber) return;
-
-          if (parentPath) {
-            const parts = parentPath.split('.');
-            const path = parts.filter(
-              (part) => part !== 'props' && part !== getDisplayName(fiber.type),
-            );
-            path.push(name);
-            overrideProps(fiber, path, newValue);
-          } else {
-            overrideProps(fiber, [name], newValue);
-          }
-        }, null);
-      }
-
-      if (section === 'state' && overrideHookState) {
-        tryOrElse(() => {
-          if (!fiber) return;
-
-          if (!parentPath) {
-            const stateNames = getStateNames(fiber);
-            const namedStateIndex = stateNames.indexOf(name);
-            const hookId =
-              namedStateIndex !== -1 ? namedStateIndex.toString() : '0';
-            overrideHookState(fiber, hookId, [], newValue);
-          } else {
-            const fullPathParts = parentPath.split('.');
-            const stateIndex = fullPathParts.indexOf('state');
-            if (stateIndex === -1) return;
-
-            const statePath = fullPathParts.slice(stateIndex + 1);
-            const baseStateKey = statePath[0];
-            const stateNames = getStateNames(fiber);
-            const namedStateIndex = stateNames.indexOf(baseStateKey);
-            const hookId =
-              namedStateIndex !== -1 ? namedStateIndex.toString() : '0';
-
-            const currentState = getCurrentState(fiber);
-            if (!currentState || !(baseStateKey in currentState)) {
-              // biome-ignore lint/suspicious/noConsole: Intended debug output
-              console.warn(sanitizeErrorMessage('Invalid state key'));
-              return;
-            }
-
-            const updatedState = updateNestedValue(
-              currentState[baseStateKey],
-              statePath.slice(1).concat(name),
-              newValue,
-            );
-            overrideHookState(fiber, hookId, [], updatedState);
-          }
-        }, null);
-      }
-
+  const handleSave = useCallback((newValue: unknown) => {
+    if (isEqual(value, newValue)) {
       setIsEditing(false);
-    },
-    [value, section, overrideProps, overrideHookState, fiber, name, parentPath],
-  );
+      return;
+    }
+
+    if (section === 'props' && overrideProps) {
+      tryOrElse(() => {
+        if (!fiber) return;
+
+        if (parentPath) {
+          const parts = parentPath.split('.');
+          const path = parts.filter(
+            (part) => part !== 'props' && part !== getDisplayName(fiber.type),
+          );
+          path.push(name);
+          overrideProps(fiber, path, newValue);
+        } else {
+          overrideProps(fiber, [name], newValue);
+        }
+      }, null);
+    }
+
+    if (section === 'state' && overrideHookState) {
+      tryOrElse(() => {
+        if (!fiber) return;
+
+        if (!parentPath) {
+          const stateNames = getStateNames(fiber);
+          const namedStateIndex = stateNames.indexOf(name);
+          const hookId =
+            namedStateIndex !== -1 ? namedStateIndex.toString() : '0';
+          overrideHookState(fiber, hookId, [], newValue);
+        } else {
+          const fullPathParts = parentPath.split('.');
+          const stateIndex = fullPathParts.indexOf('state');
+          if (stateIndex === -1) return;
+
+          const statePath = fullPathParts.slice(stateIndex + 1);
+          const baseStateKey = statePath[0];
+          const stateNames = getStateNames(fiber);
+          const namedStateIndex = stateNames.indexOf(baseStateKey);
+          const hookId =
+            namedStateIndex !== -1 ? namedStateIndex.toString() : '0';
+
+          const currentState = getCurrentState(fiber);
+          if (!currentState || !(baseStateKey in currentState)) {
+            // biome-ignore lint/suspicious/noConsole: Intended debug output
+            console.warn(sanitizeErrorMessage('Invalid state key'));
+            return;
+          }
+
+          const updatedState = updateNestedValue(
+            currentState[baseStateKey],
+            statePath.slice(1).concat(name),
+            newValue,
+          );
+          overrideHookState(fiber, hookId, [], updatedState);
+        }
+      }, null);
+    }
+
+    setIsEditing(false);
+  }, [value, section, overrideProps, overrideHookState, fiber, name, parentPath]);
 
   const checkCircularInValue = useMemo((): boolean => {
     if (!value || typeof value !== 'object' || isPromise(value)) return false;
@@ -914,25 +927,35 @@ const PropertyElement = ({
           </button>
         )}
         <div
-          className={cn('group', 'react-scan-preview-line', {
+          className={cn(
+            'group',
+            'react-scan-preview-line',
+            {
             'react-scan-highlight': isChanged,
-          })}
+            }
+          )}
         >
-          {shouldShowWarning && (
-            <Icon name="icon-alert" className="text-yellow-500" size={12} />
-          )}
+          {
+            shouldShowWarning && (
+              <Icon name="icon-alert" className="text-yellow-500" size={12} />
+            )
+          }
           <div className="react-scan-key">{name}:</div>
-          {isEditing && isEditableValue(value, parentPath) ? (
-            <EditableValue
-              value={value}
-              onSave={handleSave}
-              onCancel={() => setIsEditing(false)}
-            />
-          ) : (
-            <button type="button" className="truncate" onClick={handleEdit}>
-              {valuePreview}
-            </button>
-          )}
+          {
+            isEditing && isEditableValue(value, parentPath)
+              ? (
+                <EditableValue
+                  value={value}
+                  onSave={handleSave}
+                  onCancel={() => setIsEditing(false)}
+                />
+              )
+              : (
+                <button type="button" className="truncate" onClick={handleEdit}>
+                  {valuePreview}
+                </button>
+              )
+          }
           <CopyToClipboard
             text={clipboardText}
             className="opacity-0 transition-opacity duration-150 group-hover:opacity-100"
@@ -940,11 +963,13 @@ const PropertyElement = ({
             {({ ClipboardIcon }) => <>{ClipboardIcon}</>}
           </CopyToClipboard>
         </div>
-        {isExpandable(value) && isExpanded && (
-          <div className="react-scan-nested">
-            {renderNestedProperties(value)}
-          </div>
-        )}
+        {
+          isExpandable(value) && isExpanded && (
+            <div className="react-scan-nested">
+              {renderNestedProperties(value)}
+            </div>
+          )
+        }
       </div>
     </div>
   );
@@ -990,22 +1015,24 @@ const PropertySection = ({ title, section }: PropertySectionProps) => {
   return (
     <div className="react-scan-section">
       <div>{title}</div>
-      {Object.entries(currentData).map(([key, value]) => (
-        <PropertyElement
-          key={key}
-          name={key}
-          value={value}
-          section={section}
-          level={0}
-          objectPathMap={pathMap}
-          changedKeys={changedKeys}
-        />
-      ))}
+      {
+        Object.entries(currentData).map(([key, value]) => (
+          <PropertyElement
+            key={key}
+            name={key}
+            value={value}
+            section={section}
+            level={0}
+            objectPathMap={pathMap}
+            changedKeys={changedKeys}
+          />
+        ))
+      }
     </div>
   );
 };
 
-const WhatChanged = memo(() => {
+const WhatChanged = constant(() => {
   const [isExpanded, setIsExpanded] = useState(Store.wasDetailsOpen.value);
   const [shouldShow, setShouldShow] = useState(false);
   const { changes } = inspectorState.value;
@@ -1071,7 +1098,8 @@ const WhatChanged = memo(() => {
             <>
               <div>State:</div>
               <ul style="list-style-type:disc;padding-left:20px">
-                {Array.from(changes.state)
+                {
+                  Array.from(changes.state)
                   .map((key) => {
                     const count = getStateChangeCount(key);
                     if (count > 0) {
@@ -1083,50 +1111,55 @@ const WhatChanged = memo(() => {
                     }
                     return null;
                   })
-                  .filter(Boolean)}
+                }
               </ul>
             </>
           )}
-          {changes.props.size > 0 && (
-            <>
-              <div>Props:</div>
-              <ul style="list-style-type:disc;padding-left:20px">
-                {Array.from(changes.props)
-                  .map((key) => {
-                    const count = getPropsChangeCount(key);
-                    if (count > 0) {
-                      return (
-                        <li key={key}>
-                          {key} ×{count}
-                        </li>
-                      );
-                    }
-                    return null;
-                  })
-                  .filter(Boolean)}
-              </ul>
-            </>
-          )}
-          {changes.context.size > 0 && (
-            <>
-              <div>Context:</div>
-              <ul style="list-style-type:disc;padding-left:20px">
-                {Array.from(changes.context)
-                  .map((key) => {
-                    const count = getContextChangeCount(key);
-                    if (count > 0) {
-                      return (
-                        <li key={key}>
-                          {key.replace(/^context\./, '')} ×{count}
-                        </li>
-                      );
-                    }
-                    return null;
-                  })
-                  .filter(Boolean)}
-              </ul>
-            </>
-          )}
+          {
+            changes.props.size > 0 && (
+              <>
+                <div>Props:</div>
+                <ul style="list-style-type:disc;padding-left:20px">
+                  {Array.from(changes.props)
+                    .map((key) => {
+                      const count = getPropsChangeCount(key);
+                      if (count > 0) {
+                        return (
+                          <li key={key}>
+                            {key} ×{count}
+                          </li>
+                        );
+                      }
+                      return null;
+                    })
+                    .filter(Boolean)}
+                </ul>
+              </>
+            )
+          }
+          {
+            changes.context.size > 0 && (
+              <>
+                <div>Context:</div>
+                <ul style="list-style-type:disc;padding-left:20px">
+                  {
+                    Array.from(changes.context)
+                      .map((key) => {
+                        const count = getContextChangeCount(key);
+                        if (count > 0) {
+                          return (
+                            <li key={key}>
+                              {key.replace(/^context\./, '')} ×{count}
+                            </li>
+                          );
+                        }
+                        return null;
+                      })
+                  }
+                </ul>
+              </>
+            )
+          }
         </div>
       </div>
     </button>

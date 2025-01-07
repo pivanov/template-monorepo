@@ -1,7 +1,5 @@
 {
-  "name": "your-project-name",
-  "private": true,
-  "version": "0.0.0",
+  "name": "root",
   "type": "module",
   "scripts": {
     "dev": "node scripts/workspace.mjs dev",
@@ -9,7 +7,7 @@
     "postbuild": "node scripts/version-warning.mjs",
     "lint": "biome lint .",
     "format": "biome format . --write",
-    "preview": "vite preview"
+    "check": "biome check . --write"
   },
   "devDependencies": {
     "@biomejs/biome": "1.9.4",
